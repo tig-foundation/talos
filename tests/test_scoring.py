@@ -59,6 +59,16 @@ def test_error_on_a_track_where_every_score_is_equal_counts_as_zero():
     assert bundle_delta(base, one).tracks[0].rel_delta == pytest.approx(-0.25)
 
 
+def test_a_baseline_that_errored_everywhere_against_equal_candidate_scores_is_unscoreable():
+    # The zero fallback also applies when only the candidate scored: its equal qualities used to
+    # stand in for the baseline's errors and give a baseline mean of 200; now it is 0 and raises.
+    # resolve_baseline refuses such a baseline at job start (_require_scoreable), so the loop
+    # never gets here. mutation: keeping min(observed) when every value is equal returns 0.0
+    base = [R("t1", n, None, "timeout") for n in range(2)]
+    with pytest.raises(ScoringError, match="baseline mean quality on t1 is 0"):
+        bundle_delta(base, [R("t1", 0, 200), R("t1", 1, 200)])
+
+
 def test_mismatched_nonces_raise():
     # mutation: silently zipping unequal lists compares different instances
     with pytest.raises(ScoringError):
