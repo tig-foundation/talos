@@ -38,9 +38,25 @@ def test_error_scored_as_worst_observed_floored_at_zero():
     d = bundle_delta(BASE, cand)
     by = {t.track: t for t in d.tracks}
     # worst observed on t1 across both = 100 -> error counts as 100
+    # mutation: scoring every error as 0 gives 55 (user decision 2026-11-09, issue #103: keep
+    # the worst observed quality wherever the scored nonces differ)
     assert by["t1"].cand_mean == pytest.approx(105)
     assert by["t1"].cand_errors == 1
     assert d.error_rate == pytest.approx(0.25)
+
+
+def test_error_on_a_track_where_every_score_is_equal_counts_as_zero():
+    # issue #103: a satisfiability baseline solving every nonce at 1,000,000 made the worst
+    # observed quality the best one, so 48 timeouts counted as 48 solves.
+    # mutation: keeping min(observed) when every value is equal leaves rel_delta at 0.0; so
+    # does `<=` in place of `<` when comparing the lowest and highest observed qualities
+    base = [R("t1", n, 1_000_000) for n in range(4)]
+    timeouts = [R("t1", n, None, "timeout") for n in range(4)]
+    t = bundle_delta(base, timeouts).tracks[0]
+    assert t.cand_mean == 0
+    assert t.rel_delta == pytest.approx(-1.0)
+    one = [R("t1", 0, None, "timeout")] + base[1:]
+    assert bundle_delta(base, one).tracks[0].rel_delta == pytest.approx(-0.25)
 
 
 def test_mismatched_nonces_raise():
@@ -135,7 +151,32 @@ def test_beats_focused_applies_the_margin_to_the_focus_track_only():
     assert beats_focused(BASE, cand, RULE, "t2")
 
 
-def test_beats_focused_counts_errors_on_the_focus_track_only():
+def test_beats_focused_applies_the_error_ceiling_to_each_guard_track():
+    # issue #103: guard tracks were checked on rel_delta alone. t2's error scores as t2's
+    # worst observed quality, 100, and its other nonce rises to 400, so t2 is +25% with half
+    # its nonces errored. mutation: dropping the guard error check confirms it; `<` in place
+    # of `<=` rejects the ceiling of exactly 0.5
+    base = [R("t1", 0, 100), R("t1", 1, 100), R("t2", 0, 100), R("t2", 1, 300)]
+    cand = [R("t1", 0, 120), R("t1", 1, 120), R("t2", 0, None, "timeout"), R("t2", 1, 400)]
+    assert {t.track: t.rel_delta for t in bundle_delta(base, cand).tracks} == pytest.approx(
+        {"t1": 0.2, "t2": 0.25})
+    assert not beats_focused(base, cand, RULE, "t1")
+    half = BeatRule(margin=0.005, track_tolerance=0.0, error_ceiling=0.5)
+    assert beats_focused(base, cand, half, "t1")
+
+
+def test_beats_focused_rejects_a_guard_track_that_timed_out_on_every_nonce():
+    # issue #103, job 20261106-210803-satisfiability iteration 195: the guard track timed out
+    # 48/48 against a baseline that solved 48/48, and the guard passed it at rel_delta 0.0.
+    # mutation: reverting both the zero fallback in bundle_delta and the guard error ceiling
+    base = ([R("t1", n, 100) for n in range(2)]
+            + [R("g", n, 1_000_000) for n in range(48)])
+    cand = ([R("t1", n, 120) for n in range(2)]
+            + [R("g", n, None, "timeout") for n in range(48)])
+    assert not beats_focused(base, cand, RULE, "t1")
+
+
+def test_beats_focused_uses_the_focus_tracks_own_error_rate():
     # mutation: using the bundle error rate lets a focus-track error rate of 50% pass because
     # 40 clean guard rows dilute it to 1/42 = 2.4%, under the 5% ceiling; ignoring errors
     # entirely passes it too (the focus track is +50% on quality)

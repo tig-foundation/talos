@@ -73,7 +73,10 @@ nonces it is scored on.
 is above the challenge's `BeatRule.margin`, no track is worse than the baseline, and the error
 rate is under the challenge's ceiling. The default margin is 0, so any improvement wins and a
 tie does not; per-challenge rules live in `talos/challenges.py`. With `--track`, the focus
-track must be above the margin and no other track may get worse (`beats_focused`).
+track must be above the margin, no other track may get worse, and every track's own error rate
+must be under the ceiling (`beats_focused`). An errored nonce scores as the lowest quality
+observed on its track, floored at 0, or as 0 when every scored nonce on the track has the same
+quality, so a timeout on a track the baseline solves throughout never counts as a solve.
 
 "Becomes the best" (`talos/scoring.py::improves`) is a separate, looser rule, because the best is
 the code every later iteration edits. A candidate becomes the best when it beats the baseline, or
