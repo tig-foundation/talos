@@ -58,7 +58,12 @@ def bundle_delta(baseline: list[NonceResult], candidate: list[NonceResult]) -> B
             raise ScoringError(f"nonce mismatch on {track}")
         observed = [r.quality for r in list(b[track].values()) + list(c[track].values())
                     if r.ok and r.quality is not None]
-        worst = max(0, min(observed)) if observed else 0
+        # An errored nonce scores as the worst quality observed on the track, floored at 0. When
+        # every scored nonce has the same quality, as on a satisfiability track the baseline
+        # solves throughout, that would be the best quality too and an error would count as a
+        # solve, so it scores 0 instead (issue #103).
+        worst = (max(0, min(observed)) if observed and min(observed) < max(observed)
+                 else 0)
         nonces = sorted(b[track])
         bq = [_quality_or_worst(b[track][k], worst) for k in nonces]
         cq = [_quality_or_worst(c[track][k], worst) for k in nonces]
@@ -208,17 +213,17 @@ def focus_sets(track: str | None, training: list[NonceSet],
 
 def beats_focused(baseline: list[NonceResult], candidate: list[NonceResult], rule: BeatRule,
                   track: str) -> bool:
-    """Confirmation rule for a focused job: the focus track is over the margin with its own error
-    rate under the ceiling, and no guard track drops below -track_tolerance."""
+    """Confirmation rule for a focused job: the focus track is over the margin, no guard track
+    drops below -track_tolerance, and every track's own error rate is under the ceiling. The
+    rate is per track, so clean rows elsewhere cannot dilute errors on one (issue #103)."""
     d = bundle_delta(baseline, candidate)
     by = {t.track: t for t in d.tracks}
     if track not in by:
         raise ScoringError(f"focus track {track!r} has no results")
     focus = by[track]
     guards_ok = all(t.rel_delta >= -rule.track_tolerance for t in d.tracks if t.track != track)
-    return (focus.rel_delta > rule.margin
-            and focus.cand_errors / focus.n <= rule.error_ceiling
-            and guards_ok)
+    errors_ok = all(t.cand_errors / t.n <= rule.error_ceiling for t in d.tracks)
+    return focus.rel_delta > rule.margin and guards_ok and errors_ok
 
 
 VALIDATION_REASONS = ("native_metered_build_mismatch", "fuel_proxy_miss", "nondeterministic",
